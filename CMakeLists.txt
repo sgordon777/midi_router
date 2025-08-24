@@ -48,8 +48,6 @@ add_executable(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}
-    ${PICO_SDK_PATH}/lib/tinyusb/src
-    ${PICO_SDK_PATH}/lib/tinyusb/hw
 )
 
 # Link libs (TinyUSB is pulled in by these targets — no manual include dirs needed)
@@ -71,9 +69,9 @@ if (PICO_CYW43_SUPPORTED)
     )
 endif()
 # Create UF2/bin/hex/map
-pico_add_extra_outputs(midi_router)
+pico_add_extra_outputs(${PROJECT_NAME})
 # PIO (WS2812)
-pico_generate_pio_header(midi_router ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 #pico_add_pio_program(midi_router ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 
 

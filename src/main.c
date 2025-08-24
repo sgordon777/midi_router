@@ -39,7 +39,8 @@ static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, u
 #define WS2812_PIN     16        // change if you wired a different GPIO
 #define WS2812_IS_RGBW false    // set true if your LED is RGBW
 #define WS2812_FREQ    800000   // WS2812 is ~800 kHz
-
+#define DELAY_START_FOR_CDC 0
+#define WS_LATCH_DELAY 0
 
 static PIO  ws_pio = pio0;
 static uint ws_sm  = 0;
@@ -104,17 +105,19 @@ int main(void) {
 
 /*
   This loop waits until the serial-usb is ready so any startup messages can be seen.
-  put shorter delays in at the risk of losing startup messages
+  if startup messages aren't important, then set DELAY_START_FOR_CDC to 0
 */
-  absolute_time_t until = make_timeout_time_ms(0 /*2000*/);
+#if DELAY_START_FOR_CDC
+  absolute_time_t until = make_timeout_time_ms(2000);
   while (!stdio_usb_connected() && absolute_time_diff_us(get_absolute_time(), until) > 0) {
     tud_task();
     sleep_ms(10);
   }
+#endif
 
   ws2812_init();               // <-- add this
   ws_set_rgb(0, 255, 0);         // dim red at boot (optional)
-  sleep_us(10);  // WS2812 latch/reset (>50 µs)
+  sleep_us(80);  // WS2812 latch/reset (>50 µs)
 
 
   fflush(stdout); // optional
@@ -212,6 +215,10 @@ void midi_task(void)
     uint8_t r, g, b;
     hsv_to_rgb_255(h, s, v, &r, &g, &b);
     ws_set_rgb(r, g, b);
+#if WS_LATCH_DELAY
+    sleep_us(80);  // WS2812 latch/reset (>50 µs)
+#endif
+
   }
 
   // send note periodically
