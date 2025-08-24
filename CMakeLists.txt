@@ -36,46 +36,45 @@ pico_sdk_init()
 
 
 
-# Add executable. Default name is the project name, version 0.1
-add_executable(midi_router
+# Add executable
+add_executable(${PROJECT_NAME}
     src/main.c
     src/usb_descriptors.c
     )
 
 
-# newly added
-target_include_directories( ${PROJECT_NAME} PUBLIC
+
+# Public includes for your own headers
+target_include_directories(${PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/src
     ${CMAKE_CURRENT_LIST_DIR}
     ${PICO_SDK_PATH}/lib/tinyusb/src
-    ${PICO_SDK_PATH}/lib/tinyusb/hw           # <-- add this so "bsp/board_api.h" resolves
-
+    ${PICO_SDK_PATH}/lib/tinyusb/hw
 )
 
-
-# pull in common dependencies
-target_link_libraries(midi_router 
-  pico_stdlib
-  pico_stdlib
-  tinyusb_device
-  tinyusb_board
-)
-
-if (PICO_CYW43_SUPPORTED)
-    target_link_libraries(midi_router 
-    pico_cyw43_arch_none
+# Link libs (TinyUSB is pulled in by these targets — no manual include dirs needed)
+target_link_libraries(${PROJECT_NAME}
     pico_stdlib
+    hardware_pio
     tinyusb_device
     tinyusb_board
-    )
-endif()
+)
 
-# create map/bin/hex file etc.
-pico_add_extra_outputs(midi_router)
-
-# newly added
+# stdio config
 pico_enable_stdio_usb(${PROJECT_NAME} 1)
 pico_enable_stdio_uart(${PROJECT_NAME} 0)
 
+# Optional Wi-Fi (only if you use CYW43)
+if (PICO_CYW43_SUPPORTED)
+    target_link_libraries(${PROJECT_NAME} 
+    pico_cyw43_arch_none
+    )
+endif()
+# Create UF2/bin/hex/map
+pico_add_extra_outputs(midi_router)
+# PIO (WS2812)
+pico_generate_pio_header(midi_router ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
+#pico_add_pio_program(midi_router ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 
-# add url via pico_set_program_url
+
+# add url via pico_set_program_url (optional)

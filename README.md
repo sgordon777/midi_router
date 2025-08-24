@@ -1,3 +1,4 @@
+VER 0.2
 Composite USB device for RP2040 exposing **USB-MIDI** and **USB-CDC (stdio)**.
 -Take MIDI input from USB
 -Take MIDI input from UART
@@ -15,6 +16,9 @@ cmake --build build -j
 OR
 ./buildall.ps1
 
+## TODO
+add key scanner for my keyboard
+add midi state machine and router for routing UART MIDI->USB MIDI and MIDI-USB to UART USB
 
 
 
@@ -26,7 +30,7 @@ Don’t lose first prints: Either keep the short wait loop you added or set
 add_compile_definitions(PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=2000) in CMake.
 
 Avoid blocking when no terminal is open:
-
+    
 #define LOGF(...) do { if (stdio_usb_connected()) printf(__VA_ARGS__); } while(0)
 
 

@@ -6,6 +6,7 @@
 
 #include "bsp/board_api.h"
 #include "tusb.h"
+#include "ws2812.pio.h"
 
 // ADDED: Pico SDK headers for stdio and timing helpers
 #include "pico/stdlib.h"
@@ -32,15 +33,54 @@ enum  {
   BLINK_SUSPENDED = 2500,
 };
 
+static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b);
+
+
+#define WS2812_PIN     16        // change if you wired a different GPIO
+#define WS2812_IS_RGBW false    // set true if your LED is RGBW
+#define WS2812_FREQ    800000   // WS2812 is ~800 kHz
+
+
+static PIO  ws_pio = pio0;
+static uint ws_sm  = 0;
+
 static uint32_t blink_interval_ms = BLINK_NOT_MOUNTED;
 
 void led_toggle(void);
 void midi_task(void);
 
+//static void ws2812_init(void);
+//static inline void ws_set_rgb(uint8_t r, uint8_t g, uint8_t b);
+
+#include "hardware/pio.h"
+#include "hardware/clocks.h"
+
+//--------------------------------------------------------------------+
+// RGB
+//--------------------------------------------------------------------+
+
+static inline uint32_t pack_grb(uint8_t r, uint8_t g, uint8_t b) {
+  return ((uint32_t)g << 16) | ((uint32_t)r << 8) | b;
+}
+static inline void ws_put(uint32_t grb) {
+  // WS2812 program expects 24 bits left-justified (<< 8)
+  pio_sm_put_blocking(ws_pio, ws_sm, grb << 8u);
+}
+static void ws2812_init(void) {
+  uint offset = pio_add_program(ws_pio, &ws2812_program);
+  ws2812_program_init(ws_pio, ws_sm, offset, WS2812_PIN, WS2812_FREQ, WS2812_IS_RGBW);
+}
+static inline void ws_set_rgb(uint8_t r, uint8_t g, uint8_t b) { ws_put(pack_grb(r,g,b)); }
+
+
+
+
 /*------------- MAIN -------------*/
 int main(void) {
   board_init();
 
+
+  
   // init device stack on configured roothub port
   
   /*
@@ -61,16 +101,24 @@ int main(void) {
   // Initialize stdio backends enabled in CMake (USB CDC in your case)
   stdio_init_all();
 
-  // ADDED: optional wait (up to ~2s) for a host to open the USB CDC port,
-  // so the first printf is visible. Keep tud_task() running during the wait.
-  absolute_time_t until = make_timeout_time_ms(2000);
+
+/*
+  This loop waits until the serial-usb is ready so any startup messages can be seen.
+  put shorter delays in at the risk of losing startup messages
+*/
+  absolute_time_t until = make_timeout_time_ms(0 /*2000*/);
   while (!stdio_usb_connected() && absolute_time_diff_us(get_absolute_time(), until) > 0) {
     tud_task();
     sleep_ms(10);
   }
 
-  printf("hello from pi pico!\n");
+  ws2812_init();               // <-- add this
+  ws_set_rgb(0, 255, 0);         // dim red at boot (optional)
+  sleep_us(10);  // WS2812 latch/reset (>50 µs)
+
+
   fflush(stdout); // optional
+  printf("hello from pi pico!\n");
   led_toggle();
   while (1) {
     tud_task(); // tinyusb device task
@@ -105,6 +153,14 @@ void tud_resume_cb(void) {
   blink_interval_ms = tud_mounted() ? BLINK_MOUNTED : BLINK_NOT_MOUNTED;
 }
 
+
+
+inline uint8_t SATU8(int v) {
+  if (v < 0) return 0;
+  if (v > 255) return 255;
+  return (uint8_t)v;
+}
+
 //--------------------------------------------------------------------+
 // MIDI Task
 //--------------------------------------------------------------------+
@@ -132,9 +188,30 @@ void midi_task(void)
   while (tud_midi_available()) 
   {
     uint8_t packet[4];
+    static uint8_t v = 255;
+    static uint8_t s = 0;
     tud_midi_packet_read(packet);
     led_toggle();
     printf("recd MIDI packet: 0x%.2x,0x%.2x,0x%.2x,0x%.2x\n", packet[0], packet[1], packet[2], packet[3]);
+    switch (packet[1] & 0xf0) {
+      case 0x80: // Note Off
+        s = 0xff;
+        break;
+      case 0x90: // Note On
+        s = 0xff;
+        break;
+      default:
+        s = 0x80;
+        break;
+    }
+    uint8_t h = SATU8(packet[2] * 2); // note
+    uint8_t vtest = SATU8(packet[3]); // velocity
+    if (vtest != 0) {
+      v = vtest;
+    }
+    uint8_t r, g, b;
+    hsv_to_rgb_255(h, s, v, &r, &g, &b);
+    ws_set_rgb(r, g, b);
   }
 
   // send note periodically
@@ -178,4 +255,27 @@ void led_toggle(void)
   board_led_write(led_state);
   led_state = 1 - led_state; // toggle
 
+}
+
+
+
+static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v,
+                                  uint8_t *r, uint8_t *g, uint8_t *b) {
+    if (s == 0) { *r = *g = *b = v; return; }    // gray
+
+    uint16_t region    = h / 43;                  // 0..5
+    uint16_t remainder = (h - region * 43) * 6;   // 0..258
+
+    uint16_t p = (uint16_t)v * (255 - s) / 255;
+    uint16_t q = (uint16_t)v * (255 - (s * remainder) / 255) / 255;
+    uint16_t t = (uint16_t)v * (255 - (s * (255 - remainder)) / 255) / 255;
+
+    switch (region) {
+      case 0: *r = v; *g = t; *b = p; break;
+      case 1: *r = q; *g = v; *b = p; break;
+      case 2: *r = p; *g = v; *b = t; break;
+      case 3: *r = p; *g = q; *b = v; break;
+      case 4: *r = t; *g = p; *b = v; break;
+      default:*r = v; *g = p; *b = q; break;      // region 5
+    }
 }
