@@ -45,7 +45,20 @@ enum  {
 #define VER 3
 
 
+#define GPIO_A 2  // change if you want others
+#define GPIO_B 3
 
+static inline void two_gpio_init_outputs(void) {
+    gpio_init(GPIO_A); gpio_set_dir(GPIO_A, GPIO_OUT); gpio_put(GPIO_A, 0);
+    gpio_init(GPIO_B); gpio_set_dir(GPIO_B, GPIO_OUT); gpio_put(GPIO_B, 0);
+}
+
+static inline void gpio_a_set(bool v) { gpio_put(GPIO_A, v); }
+static inline void gpio_b_set(bool v) { gpio_put(GPIO_B, v); }
+
+// handy toggles
+static inline void gpio_a_toggle(void) { gpio_xor_mask(1u << GPIO_A); }
+static inline void gpio_b_toggle(void) { gpio_xor_mask(1u << GPIO_B); }
 
 
 //--------------------------------------------------------------------+
@@ -58,17 +71,14 @@ enum  {
 #define MIDI_UART_TX_PIN     16    // GPIO16 = TX
 #define MIDI_UART_RX_PIN     17    // GPIO17 = RX
 #elif defined (PICO_ZERO)
-#define MIDI_UART_TX_PIN     12    
-#define MIDI_UART_RX_PIN     13    
+#define MIDI_UART_TX_PIN     0
+#define MIDI_UART_RX_PIN     1
 #endif
 
 #define MIDI_UART_BAUD       31250 // MIDI standard
 #define UART_RX_BUF_SIZE     256   // must be power of 2
 
 
-static volatile uint8_t  uart_rx_buf[UART_RX_BUF_SIZE];
-static volatile uint16_t uart_rx_head = 0;
-static volatile uint16_t uart_rx_tail = 0;
 
 // ---- Simple ring buffer for RX ----
 static volatile uint8_t  uart_rx_buf[UART_RX_BUF_SIZE];
@@ -185,6 +195,9 @@ static void ws2812_init(void) {
 }
 static inline void ws_set_rgb(uint8_t r, uint8_t g, uint8_t b) { ws_put(pack_grb(r,g,b)); }
 
+static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b);
+void led_toggle(void);
+
 
 //--------------------------------------------------------------------+
 // MIDI
@@ -203,19 +216,23 @@ typedef struct midid_state_data_t {
   uint8_t cmd_len;   // len of message (1,2,3)
 } midi_state_data_t;
 
-
-
-// prototypes
 uint8_t midi1_command_len(uint8_t cmd, uint8_t chn);
-void midi_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_t cable_num );
-static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b);
-void led_toggle(void);
-void midi_task(void);
+void uart_midi_in_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_t cable_num );
+void usb_midi_in_uart_midi_out(void);
+
+
+//--------------------------------------------------------------------+
+// Main
+//--------------------------------------------------------------------+
 
 
 
 // main
 int main(void) {
+  midi_state_data_t state = {STATE_WAITFOR_STATUS, 0, 0, 0};
+  uint8_t const cable_num = 0; // MIDI jack associated with USB endpoint
+  uint8_t const channel   = 0; // 0 for channel 1
+
   board_init();
 
   
@@ -253,18 +270,20 @@ int main(void) {
 
   fflush(stdout); // optional
   printf("hello from pi pico!\n");
-  led_toggle();
+  gpio_a_set(1);
+  gpio_b_set(1);
   while (1) {
     tud_task(); // tinyusb device task
-    midi_task();
+    
+    usb_midi_in_uart_midi_out();
 
     // check for bytes form UART, and process them one by one
     uint8_t b;
-    if (uart_rx_available()) {
+    if (uart_rx_available()) 
+    {
         (void)uart_rx_pop(&b);
-        midi_state_machine(b, &some_uart_state, 0);
-}    
-
+        uart_midi_in_state_machine(b, &state, cable_num);
+    }
   }
 }
 
@@ -295,8 +314,6 @@ void tud_resume_cb(void) {
   blink_interval_ms = tud_mounted() ? BLINK_MOUNTED : BLINK_NOT_MOUNTED;
 }
 
-
-
 inline uint8_t SATU8(int v) {
   if (v < 0) return 0;
   if (v > 255) return 255;
@@ -307,17 +324,7 @@ inline uint8_t SATU8(int v) {
 // MIDI Task
 //--------------------------------------------------------------------+
 
-// Variable that holds the current position in the sequence.
-uint32_t note_pos = 0;
-
-// Store example melody as an array of note values
-const uint8_t note_sequence[] = {
-  74,78,81,86,90,93,98,102,57,61,66,69,73,78,81,85,88,92,97,100,97,92,88,85,81,78,
-  74,69,66,62,57,62,66,69,74,78,81,86,90,93,97,102,97,93,90,85,81,78,73,68,64,61,
-  56,61,64,68,74,78,81,86,90,93,98,102
-};
-
-void midi_task(void)
+void usb_midi_in_uart_midi_out(void)
 {
   static uint32_t start_ms = 0;
 
@@ -333,9 +340,9 @@ void midi_task(void)
     static uint8_t v = 255;
     static uint8_t s = 0;
     tud_midi_packet_read(packet);
-    led_toggle();
     printf("recd MIDI packet: 0x%.2x,0x%.2x,0x%.2x,0x%.2x\n", packet[0], packet[1], packet[2], packet[3]);
-    switch (packet[1] & 0xf0) {
+    switch (packet[1] & 0xf0) 
+    {
       case 0x80: // Note Off
         s = 0xff;
         break;
@@ -345,15 +352,13 @@ void midi_task(void)
       default:
         s = 0x80;
         break;
-
-      // rout USB MIDI to UART MIDI
-      // Note: this is a very simple implementation that does not handle SysEx
-      // or running status. It just translates 1:1 USB MIDI packets to UART MIDI
-      uint8_t cmdlen = midi1_command_len((packet[1]>>4)&0x0f, packet[1]&0x0f);
-      midi_uart_write(packet, cmdlen);
-
-
     }
+    // rout USB MIDI to UART MIDI
+    // Note: this is a very simple implementation that does not handle SysEx
+    // or running status. It just translates 1:1 USB MIDI packets to UART MIDI
+    uint8_t cmdlen = midi1_command_len((packet[1]>>4)&0x0f, packet[1]&0x0f);
+    midi_uart_write(packet, cmdlen);
+
     uint8_t h = SATU8(packet[2] * 2); // note
     uint8_t vtest = SATU8(packet[3]); // velocity
     if (vtest != 0) {
@@ -366,37 +371,6 @@ void midi_task(void)
     sleep_us(80);  // WS2812 latch/reset (>50 µs)
 #endif
 
-  }
-
-  // send note periodically
-  if (board_millis() - start_ms < 286) {
-    return; // not enough time
-  }
-  start_ms += 286;
-
-  // Previous positions in the note sequence.
-  int previous = (int) (note_pos - 1);
-
-  // If we currently are at position 0, set the
-  // previous position to the last note in the sequence.
-  if (previous < 0) {
-    previous = sizeof(note_sequence) - 1;
-  }
-
-  // Send Note On for current position at full velocity (127) on channel 1.
-  uint8_t note_on[3] = { 0x90 | channel, note_sequence[note_pos], 127 };
-  tud_midi_stream_write(cable_num, note_on, 3);
-
-  // Send Note Off for previous note.
-  uint8_t note_off[3] = { 0x80 | channel, note_sequence[previous], 0};
-  tud_midi_stream_write(cable_num, note_off, 3);
-
-  // Increment position
-  note_pos++;
-
-  // If we are at the end of the sequence, start over.
-  if (note_pos >= sizeof(note_sequence)) {
-    note_pos = 0;
   }
 }
 
@@ -433,8 +407,9 @@ static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v,
 }
 
 
-void midi_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_t cable_num )
+void uart_midi_in_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_t cable_num )
 {
+  gpio_b_toggle();
   if (midi_state->state == STATE_WAITFOR_STATUS) 
   {
     if ( (new_byte & 0x80) == 0)
@@ -445,6 +420,7 @@ void midi_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_
         // create a 2 byte MIDI packet and send to MIDI out
         uint8_t midi_1p0_msg[2] = { midi_state->status,  new_byte };
         tud_midi_stream_write(cable_num, midi_1p0_msg, 2);
+        gpio_a_toggle();
         midi_state->state = STATE_WAITFOR_STATUS;
       }
       else
@@ -472,6 +448,7 @@ void midi_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_
         // create a 1 byte MIDI packet and send to MIDI out
         uint8_t midi_1p0_msg[1] = { midi_state->status };
         tud_midi_stream_write(cable_num, midi_1p0_msg, 1);
+        gpio_a_toggle();
         midi_state->state = STATE_WAITFOR_STATUS;
       }
       else
@@ -489,6 +466,7 @@ void midi_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_
       // create a 2 byte MIDI packet and send to MIDI out
       uint8_t midi_1p0_msg[2] = { midi_state->status, midi_state->p1 };
       tud_midi_stream_write(cable_num, midi_1p0_msg, 2);
+      gpio_a_toggle();
       midi_state->state = STATE_WAITFOR_STATUS;
     }
     else
@@ -501,6 +479,7 @@ void midi_state_machine (uint8_t new_byte, midi_state_data_t* midi_state, uint8_
     // create a 3 byte MIDI packet and send to MIDI out
     uint8_t midi_1p0_msg[3] = { midi_state->status, midi_state->p1, new_byte };
     tud_midi_stream_write(cable_num, midi_1p0_msg, 3);
+    gpio_a_toggle();
     midi_state->state = STATE_WAITFOR_STATUS;
   }
 
