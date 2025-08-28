@@ -1,4 +1,10 @@
-VER 0.2
+VER 0.4
+-add note button
+-fix USB->UART routing
+-UART->USB latency: 80
+-button->usb latency: 75
+
+
 Composite USB device for RP2040 exposing **USB-MIDI** and **USB-CDC (stdio)**.
 -Take MIDI input from USB
 -Take MIDI input from UART
@@ -37,3 +43,9 @@ Avoid blocking when no terminal is open:
 WSL reminder: The COM port shows up in Windows, not inside WSL.
 
 MIDI RX sanity: You’re already draining tud_midi_available(); that prevents DAWs from blocking on send.
+
+Tools
+
+# mpremote is a useful command-line terminal:
+mpremote devs               # query ports
+mpremote connect COM5       # connect

@@ -38,6 +38,8 @@
     "raspberry-pi-pico.cmakePath": "${HOME}/.pico-sdk/cmake/v3.31.5/bin/cmake",
     "raspberry-pi-pico.ninjaPath": "${HOME}/.pico-sdk/ninja/v1.12.1/ninja",
     "files.associations": {
-        "ws2812.pio.h": "c"
+        "ws2812.pio.h": "c",
+        "irq.h": "c",
+        "random": "c"
     }
 }
