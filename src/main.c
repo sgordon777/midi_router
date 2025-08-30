@@ -203,7 +203,7 @@ static inline int uart_rx_pop(uint8_t *out) {
 //--------------------------------------------------------------------+
 
 #if defined(MODULE_PICO_OG)
-#define WS2812_PIN     12        // change if you wired a different GPIO
+#define WS2812_PIN     21        // change if you wired a different GPIO
 #elif defined (MODULE_PICO_ZERO)
 #define WS2812_PIN     16        // change if you wired a different GPIO
 #endif
@@ -232,8 +232,8 @@ static void ws2812_init(void) {
   ws2812_program_init(ws_pio, ws_sm, offset, WS2812_PIN, WS2812_FREQ, WS2812_IS_RGBW);
 }
 static inline void ws_set_rgb(uint8_t r, uint8_t g, uint8_t b) { ws_put(pack_grb(r,g,b)); }
-
 static inline void hsv_to_rgb_255(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b);
+void visualize_ws2812(uint8_t* midi_message);
 void led_toggle(void);
 
 
@@ -273,6 +273,7 @@ int main(void)
   uint8_t const cable_num = 0; // MIDI jack associated with USB endpoint
   uint8_t const channel   = 0; // 0 for channel 1
   int butval, old_butval=0;
+  int keyval = 0, old_keyval=0;
 
   // board init
   board_init();
@@ -321,24 +322,30 @@ int main(void)
     usb_midi_in_uart_midi_out();
 #ifdef FEATURE_C_BUTTON
     butval = button_read();
-    if (butval != old_butval)
+    int c = getchar_timeout_us(0);  // 0 = poll immediately
+    if (c != PICO_ERROR_TIMEOUT) 
+    {
+       keyval = 1;
+    }
+    else
+    {
+       keyval = 0;
+    }
+    if ( (butval != old_butval) || (keyval!=old_keyval) )
     {
       // if button status changed, send a "middle C" note_on message to USB
-      uint8_t note_on[3] = { 0x90 | channel, 0x3c, 77 * butval }; // on if butval=1, off if butval=0
+      uint8_t note_on[3] = { 0x90 | channel, 0x3c, 77 * MAX(butval,keyval) }; // on if butval=1, off if butval=0
       tud_midi_stream_write(cable_num, note_on, 3); 
       printf("button event detected, sending noteOn: 0x%.2x,0x%.2x,0x%.2x\n", note_on[0], note_on[1], note_on[2]);
     }
     old_butval = butval;
+    old_keyval = keyval;
 #endif // FEATURE_C_BUTTON
 #ifdef FEATURE_PLAY_TUNE_ON_USB_MIDI
     play_tune_task();
 #endif // FEATURE_PLAY_TUNE_ON_USB_MIDI
-    // blink every interval ms
-    static uint32_t start_ms = 0;
-    if (board_millis() - start_ms >= blink_interval_ms) {
-      start_ms += blink_interval_ms;
-      led_toggle();
-    }
+    // check for inactivity and blink LED
+
 #ifdef FEATURE_UART_TO_USB_MIDI_ROUTER
     // check for bytes form UART, and process them one by one
     uint8_t b;
@@ -348,6 +355,7 @@ int main(void)
         uart_midi_in_state_machine(b, &state, cable_num);
     }
 #endif // FEATURE_UART_TO_USB_MIDI_ROUTER
+
   }
 }
 
@@ -397,46 +405,18 @@ void usb_midi_in_uart_midi_out(void)
   while (tud_midi_available()) 
   {
     uint8_t packet[4];
-    static uint8_t v = 255;
-    static uint8_t s = 0;
     tud_midi_packet_read(packet);
-    printf("recd MIDI packet: 0x%.2x,0x%.2x,0x%.2x,0x%.2x\n", packet[0], packet[1], packet[2], packet[3]);
-    switch (packet[1] & 0xf0) 
-    {
-      case 0x80: // Note Off
-        s = 0xff;
-        break;
-      case 0x90: // Note On
-        s = 0xff;
-        break;
-      default:
-        s = 0x80;
-        break;
-    }
-#ifdef FEATURE_USB_TO_UART_MIDI_ROUTER
-
-    // rout USB MIDI to UART MIDI
-    // Note: this is a very simple implementation that does not handle SysEx
-    // or running status. It just translates 1:1 USB MIDI packets to UART MIDI
+    printf("recd MIDI message from USB: 0x%.2x,0x%.2x,0x%.2x,0x%.2x\n", packet[0], packet[1], packet[2], packet[3]);
+#ifdef FEATURE_USB_TO_UART_MIDI_ROUTER    
     uint8_t cmdlen = midi1_command_len((packet[1]>>4)&0x0f, packet[1]&0x0f);
     midi_uart_write(&packet[1], cmdlen);
-
-    uint8_t h = SATU8(packet[2] * 2); // note
-    uint8_t vtest = SATU8(packet[3]); // velocity
-    if (vtest != 0) {
-      v = vtest;
-    }
-    uint8_t r, g, b;
-    hsv_to_rgb_255(h, s, v, &r, &g, &b);
-    ws_set_rgb(r, g, b);
-#if WS_LATCH_DELAY
-    sleep_us(80);  // WS2812 latch/reset (>50 µs)
-#endif
 #endif // FEATURE_USB_TO_UART_MIDI_ROUTER
-
+    visualize_ws2812(&packet[1]);
   }
-}
+#ifdef FEATURE_USB_TO_UART_MIDI_ROUTER
 
+#endif // FEATURE_USB_TO_UART_MIDI_ROUTER
+}
 
 // Variable that holds the current position in the sequence.
 uint32_t note_pos = 0;
@@ -528,7 +508,6 @@ void uart_midi_in_state_machine (uint8_t new_byte, midi_state_data_t* midi_state
   int output_len = 0;
   uint8_t b0=0, b1=0, b2=0; // max len=3
 
-  gpio_b_toggle();
   if (midi_state->state == STATE_WAITFOR_STATUS) 
   {
     if ( (new_byte & 0x80) == 0)
@@ -598,8 +577,13 @@ void uart_midi_in_state_machine (uint8_t new_byte, midi_state_data_t* midi_state
   if (output_len > 0)
   {
         uint8_t midi_1p0_msg[3] = { b0, b1, b2 }; // max len=3
-        tud_midi_stream_write(cable_num, midi_1p0_msg, output_len);
-        printf("recd UART packet[len=%d]: 0x%.2x,0x%.2x,0x%.2x\n", output_len, b0, b1, b2);
+        if (midi_1p0_msg[0] != 0xfe) // ignore active sensing
+        {
+          tud_midi_stream_write(cable_num, midi_1p0_msg, output_len);
+          printf("recd MIDI message from UART[len=%d]: 0x%.2x,0x%.2x,0x%.2x\n", output_len, b0, b1, b2);
+          visualize_ws2812(midi_1p0_msg);
+        }
+
         gpio_a_toggle();
         midi_state->state = STATE_WAITFOR_STATUS;
   }
@@ -647,3 +631,37 @@ uint8_t midi1_command_len(uint8_t cmd, uint8_t chn)
       return 0; // undefined message, error but stay in WAITFOR_STATUS
   }
 }
+
+void visualize_ws2812(uint8_t* midi_msg)
+{
+    static uint8_t v = 255;
+    uint8_t s = 0;
+    uint8_t h = 0;
+
+    uint8_t r, g, b;
+
+    if (midi_msg[0] == 0xfe) return; // ignore active sensing
+    h = SATU8(midi_msg[1] * 2); // note
+    uint8_t vtest = SATU8(midi_msg[2]); // velocity
+    if (vtest != 0)    v = vtest;
+    switch (midi_msg[0] & 0xf0) 
+    {
+      case 0x80: // Note Off
+        s = 0xff;
+        break;
+      case 0x90: // Note On
+        s = 0xff;
+        break;
+      default:
+        s = 0x80;
+        break;
+    }
+    hsv_to_rgb_255(h, s, v, &r, &g, &b);
+    ws_set_rgb(r, g, b);
+#if WS_LATCH_DELAY
+    sleep_us(80);  // WS2812 latch/reset (>50 µs)
+#endif
+
+  }
+
+
