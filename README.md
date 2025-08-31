@@ -1,4 +1,4 @@
-VER 0.4
+VER 0.7
 -add note button
 -fix USB->UART routing
 -UART->USB latency: 80

@@ -27,7 +27,7 @@
 //--------------------------------------------------------------------+
 
 // version
-#define VER 4
+#define VER 7
 // features
 #define FEATURE_C_BUTTON
 #define FEATURE_UART_TO_USB_MIDI_ROUTER
@@ -635,23 +635,63 @@ uint8_t midi1_command_len(uint8_t cmd, uint8_t chn)
 void visualize_ws2812(uint8_t* midi_msg)
 {
     static uint8_t v = 255;
-    uint8_t s = 0;
-    uint8_t h = 0;
+    static uint8_t s = 0;
+    static uint8_t h = 0;
+    uint8_t vtest = 0;
 
     uint8_t r, g, b;
 
     if (midi_msg[0] == 0xfe) return; // ignore active sensing
-    h = SATU8(midi_msg[1] * 2); // note
-    uint8_t vtest = SATU8(midi_msg[2]); // velocity
-    if (vtest != 0)    v = vtest;
     switch (midi_msg[0] & 0xf0) 
     {
       case 0x80: // Note Off
-        s = 0xff;
-        break;
       case 0x90: // Note On
         s = 0xff;
+        h = SATU8(midi_msg[1] * 2); // note
+        vtest = SATU8(midi_msg[2]); // velocity
+        if (vtest != 0)    v = vtest;
         break;
+
+      case 0xa0: // polyphony
+        s = 0x80;
+        vtest = SATU8(midi_msg[2]);
+        if (vtest != 0)    v = vtest;
+        break;
+
+      case 0xb0: // control change
+        s = 0x80;
+        vtest = SATU8(midi_msg[2]);
+        if (vtest != 0)    v = vtest;
+        break;
+
+      case 0xc0: // program change
+        h = 0xf0;
+        s = 0xff;
+        vtest = SATU8(midi_msg[1]*16);
+        if (vtest != 0)    v = vtest;
+        break;
+
+      case 0xd0: // pressure
+        s = 0x20;
+        vtest = SATU8(midi_msg[2]);
+        if (vtest != 0)    v = vtest;
+        break;
+
+      case 0xe0: // bend
+        s = 0xc0;
+        vtest = SATU8(midi_msg[2]);
+        if (vtest != 0)    v = vtest;
+        break;
+
+
+      case 0xF0: // SysEx
+        s = 0xff;
+        h = 0x00;
+        v = 0xff;
+        break;
+
+
+
       default:
         s = 0x80;
         break;

@@ -93,7 +93,7 @@ enum {
 char const* string_desc_arr[] = {
   (const char[]){ 0x09, 0x04 }, // 0: English (0x0409)
   "pigo_corp",                    // 1: Manufacturer
-  "USB->midi_router",             // 2: Product
+  "usb_midi_router",             // 2: Product
   NULL,                         // 3: Serial = board unique ID
 };
 
